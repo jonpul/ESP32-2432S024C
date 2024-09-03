@@ -14,6 +14,9 @@ PNG png;
 #include <TFT_eSPI.h>              
 TFT_eSPI tft = TFT_eSPI();         
 
+// sadly these have to be globals
+int16_t xpos = 0;
+int16_t ypos = 0;
 
 void setup()
 {
@@ -49,8 +52,8 @@ void loop()
 {
   tft.fillScreen(TFT_BLACK);
   
-  int16_t xpos = 10;
-  int16_t ypos = 10;
+  xpos = 10;
+  ypos = 10;
 
   int16_t rc = png.open("/xmastree_100px.png", pngOpen, pngClose, pngRead, pngSeek, pngDraw);
       
