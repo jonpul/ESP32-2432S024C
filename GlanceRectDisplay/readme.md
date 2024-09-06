@@ -3,7 +3,7 @@ Breaks up the lines to fit the display.  (not perfect)
 Pages are:
 * Thought
 * Joke
-* Days until event reminders  (my wedding anniversary, halloween and christmas)
+* Days until event reminders  ( like wedding anniversary, halloween and christmas)
 * Magic 8 Ball decision maker
 Gestures to navigate from page to page, and also runs on a cycle.
 Loads PNGs you pre-load in SPIFFS for the events and Magic 8 Ball pages.
