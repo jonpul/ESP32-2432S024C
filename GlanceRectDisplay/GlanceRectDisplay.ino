@@ -1,5 +1,5 @@
 // make sure #define TOUCH_CS line is commented out in Setup42_ILI9341_ESP32.h (the "42" may change over time, but that file for ILI9341)
-// This line needs to be uncommented for the Elecrow display. 
+// This line needs to be uncommented for the Elecrow 2.4" resistive touch display. 
 
 // ESP32 Dev Module
 
@@ -13,9 +13,29 @@
 #include <HTTPClient.h>
 #include <Arduino_JSON.h> // https://github.com/arduino-libraries/Arduino_JSON
 #include <TimeLib.h> // https://github.com/PaulStoffregen/Time
-#include "secrets.h"
 #include <time.h>
 #include <math.h>
+
+// set up event reminder struct  --- actual events are populated in secrets.h
+struct event {
+                  char eventName[100];      // required
+                  int month;                // required 
+                  int day;                  // if day equals zero "1" is assumed
+                  int startYear;            // if year is > zero it will show the number of the event "22nd birthday", "37th anniversary", etc
+                  uint32_t textColor;       // TFT_eSPI color in 565 format. Can also be a TFT_eSPI constant like TFT_RED or whatever
+                  char iconFilename[100];   // filename matching a 100px wide PNG icon file loaded in SPIFFS, including the leading slash ("/")
+                };
+
+// to be removed
+int yearMarried = 1987;
+
+
+
+#include "secrets.h"
+
+int maxEventIndex = (sizeof(events)/sizeof(event))-1;
+int lastEventID = -1;
+int currentEventID = 0;
 
 #include <PNGdec.h>   // PNGDecoder
 
@@ -75,18 +95,14 @@ bool backlightOn = true;
 BBCapTouch bbct;
 const char *szNames[] = {"Unknown", "FT6x36", "GT911", "CST820"};
 
-int yearMarried = 1987;
-
 // Pages
 // originally an enum but it wasn't actually bringing much to the party so just doing it manually
 //  THOUGHT/QUOTE = 0
 //  DADJOKE = 1
-//  DAYSTOANNIVERSARY = 2
-//  DAYSTOHALLOWEEN = 3
-//  DAYSTOCHRISTMAS = 4
-//  EIGHTBALL = 5
-const int numPages = 6;
-//const int numPages = 5;
+//  REMINDERS = 2
+//  EIGHTBALL = 3
+const int numPages = 4;
+
 int curPage = 0;
 bool pageJustChanged = false;
 
@@ -106,6 +122,8 @@ long lastDateRefreshMillis = millis();    // how long since we last refreshed th
 long lastCheckSleepWakeMillis = millis(); // how long since we last refreshed the date
 #define MILLIS_8BALL_LIMIT 500           // debounce 8ball tap requests a little bit
 long millisLast8BallAsk = millis();          
+#define EVENT_DISPLAY_MILLIS 5000         // how long to display an event
+int lastDisplayMillis = millis();         // initialize rotating display pause timer     
 
 // have a few stored quotes in case we have rate limit or connection problems
 String cannedThoughts[] = {"The shoe that fits one person pinches another. There is no recipe for living that suits all cases.","Neither a borrower nor a lender be.", "The greatest glory in living lies not in never falling, but in rising every time we fall.", "The way to get started is to quit talking and begin doing.", "Your time is limited, so don't waste it living someone else's life.","If you set your goals ridiculously high and it's a failure, you will fail above everyone else's success."};
@@ -125,6 +143,20 @@ void setup() {
   // put your setup code here, to run once:
   // prep the display
   Serial.begin(115200);
+
+
+  for(int i=0; i<=maxEventIndex; i++)
+  {
+    Serial.println(events[i].eventName);
+    Serial.printf("%d/%d\n", events[i].month, events[i].day);
+    if(events[i].startYear > 0)
+       Serial.printf("Starting in %d\n",events[i].startYear);
+    Serial.println(events[i].iconFilename);
+    Serial.printf("Color: %04x\n",events[i].textColor);
+    Serial.println("---------------------");
+  }
+
+
 
   // turn off this horrible RGB LED (bizarre but 255 is the low value for this)
   pinMode(4, OUTPUT); //red
@@ -282,11 +314,9 @@ void loop() {
           break; 
         case 1: // nothing on joke
           break;
-        case 2: // nothing on event pages
-        case 3: // halloween
-        case 4: // christmas
+        case 2: // nothing on events page
           break;
-        case 5: // nothing on 8 ball
+        case 3: // nothing on 8 ball
           displayMagic8Ball(random(3),-1);
           pageJustChanged = true;
           lastPageDisplayMillis = millis(); // reset page display timer
@@ -334,13 +364,9 @@ void loop() {
           pageJustChanged = true;
           lastPageDisplayMillis = millis(); // reset page display timer
           break;
-        case 2: // anniversary
+        case 2: // events
           break;
-        case 3: // halloween
-          break;
-        case 4: // christmas
-          break;
-        case 5: // 8 ball
+        case 3: // 8 ball
           break;
       }
       gestureResult = NOTOUCH;
@@ -356,11 +382,12 @@ void loop() {
         break;
       case 1: // do nothing for joke
         break;
-      case 2: // do nothing for days to event pages 
-      case 3: 
-      case 4: 
+      case 2: // previous event
+        currentEventID--;
+        lastDisplayMillis = millis();
+        pageJustChanged = true;
         break;
-      case 5: // trigger the 8 ball
+      case 3: // do nothing for 8 ball
         break;
     }
     gestureResult = NOTOUCH;
@@ -374,11 +401,12 @@ void loop() {
         break;
       case 1: // do nothing for joke
         break;
-      case 2: // nothing for event countdown pages
-      case 3: 
-      case 4:
+      case 2: // next event
+        currentEventID++;
+        lastDisplayMillis = millis();
+        pageJustChanged = true;
         break;
-      case 5: // nothing for 8 ball
+      case 3: // nothing for 8 ball
         break;
     }
     gestureResult = NOTOUCH;
@@ -451,31 +479,33 @@ void loop() {
       case 2:  // days til anniversary
           if(pageJustChanged)
           {
-            displayDaysToEvent(2, daysBetweenDateAndNow(2024,10,30), setYearOrdinal((year()-yearMarried)));
+            if(currentEventID > maxEventIndex)
+            {
+              currentEventID = 0;
+            }
+            else if (currentEventID < 0)
+            {
+              currentEventID = maxEventIndex;
+            }
+            if(lastEventID == -1)
+            {
+              lastEventID = currentEventID;
+            }
+            displayDaysToEvent(currentEventID);
+            lastDisplayMillis = millis(); // keep the event from changing if we just got to this page
+          }
+          pageJustChanged = false;
+          // this rotates through the events on this page, if it's time to change, bump the eventID and set pageJustChanged
+          if(millis() > (EVENT_DISPLAY_MILLIS + lastDisplayMillis))
+          {
+            currentEventID++;  // next event
+            lastDisplayMillis = millis();
+            pageJustChanged = true; 
           }
           last8BallAnswerType = -1;
           last8BallAnswer = -1;
-          pageJustChanged = false;
           break;
-      case 3: // halloween
-        if(pageJustChanged)
-        {
-          displayDaysToEvent(1, daysBetweenDateAndNow(2024,10,31), "");
-        }
-        last8BallAnswerType = -1;
-        last8BallAnswer = -1;
-        pageJustChanged = false;
-        break;
-      case 4: // christmas
-        if(pageJustChanged)
-        {
-          displayDaysToEvent(0, daysBetweenDateAndNow(2024,12,25), "");
-        }
-        last8BallAnswerType = -1;
-        last8BallAnswer = -1;
-        pageJustChanged = false;
-        break;
-      case 5: // 8ball
+      case 3: // 8ball
         if(pageJustChanged)
         {
           displayMagic8Ball(last8BallAnswerType, last8BallAnswer);
@@ -936,50 +966,40 @@ void displayDadJoke()
   tft.resetViewport();
 }
 
-void displayDaysToEvent(int eventType, int numDays, String anniversaryNbr)
+void displayDaysToEvent(int eventID)
 {
-  // 0 Christmas
-  // 1 Halloween
-  // 2 Anniversary
+  String yearOrdinal = getYearOrdinal(events[currentEventID].startYear, events[currentEventID].month, events[currentEventID].day);
+
   tft.fillScreen(TFT_BLACK);
   tft.setTextDatum(MC_DATUM);
   tft.setTextSize(1); 
   tft.setTextColor(TFT_WHITE);
-  tft.drawString((String)numDays, 170, 75,7);
+  String daysTo = (String)daysBetweenDateAndNow(year(), events[currentEventID].month, events[currentEventID].day);
+  tft.drawString(daysTo, 190, 30,7);
   tft.setFreeFont(ROBOTO22);
-  tft.drawString("days until",180, 120,GFXFF);
+  tft.drawString("days until",200, 80,GFXFF);
 
-  xpos = 5;
-  ypos = (tft.height()-100)/2;
-  int16_t rc;
 
-  switch (eventType)
+  tft.setTextColor(events[eventID].textColor);
+  // if there is a year ordinal (because a start year was specified) draw it, otherwise don't
+  if(yearOrdinal.length() > 0)
   {
-    case 0: // christmas
-      rc = png.open("/xmastree_100px.png", pngOpen, pngClose, pngRead, pngSeek, pngDraw);
-
-      tft.setTextColor(TFT_GREEN);
-      tft.drawString("CHRISTMAS!!!",180, 150, GFXFF);
-      break;
-    case 1:
-      rc = png.open("/halloween_100px.png", pngOpen, pngClose, pngRead, pngSeek, pngDraw);
-
-      tft.setTextColor(TFT_ORANGE);
-      tft.drawString("HALLOWEEN!!!",180, 150, GFXFF);
-      break;
-    case 2:
-      rc = png.open("/hearts_100px.png", pngOpen, pngClose, pngRead, pngSeek, pngDraw);
-
-      tft.setTextColor(TFT_PINK);
-      tft.drawString(anniversaryNbr,180, 150, GFXFF);
-      tft.drawString("ANNIVERSARY!!!",180, 180, GFXFF);
-      break;
+    tft.drawString(yearOrdinal,200, 110, GFXFF);
+    tft.drawString(events[eventID].eventName,200, 140, GFXFF);
   }
+  else
+  {
+    tft.drawString(events[eventID].eventName,200, 110, GFXFF);
+  }
+  
+  int16_t rc = png.open(events[eventID].iconFilename, pngOpen, pngClose, pngRead, pngSeek, pngDraw);
   // draw the PNG we opened 
   if (rc == PNG_SUCCESS) 
   {
     tft.startWrite();
     //Serial.printf("image specs: (%d x %d), %d bpp, pixel type: %d\n", png.getWidth(), png.getHeight(), png.getBpp(), png.getPixelType());
+    xpos = 5;
+    ypos = (tft.height()-png.getHeight())-5;
     if (png.getWidth() > MAX_IMAGE_WIDTH) {
       Serial.println("Image too wide for allocated line buffer size!");
     }
@@ -1143,17 +1163,40 @@ void parseTime(const char* localTime)
   Serial.printf("Parsed and set time......  %d:%d:%d %d/%d/%d\n",hour(), minute(), second(), month(), day(), year());
 }
 
-String setYearOrdinal(int nbrYears)
+String getYearOrdinal(int eventStartYear, int eventMonth, int eventDay)
 {
-  // Use this approach to add the st, nd, rd, th
-    if ((nbrYears % 10 == 1) && (nbrYears % 100 != 11))
-        return (String)nbrYears+"st";
-    else if ((nbrYears % 10 == 2) && (nbrYears % 100 != 12))
-        return (String)nbrYears+"nd";
-    else if ((nbrYears % 10 == 3) && (nbrYears % 100 != 13))
-        return (String)nbrYears+"rd";
-    else
-        return (String)nbrYears+"th";
+  int nbrYears = 0;
+
+  if(year() < eventStartYear || eventStartYear <= 0)  // event doesn't have a start year or hasn't happened yet, return empty string
+  {
+    return "";
+  }
+  else if((month() < eventMonth) || (month() == eventMonth && day() <= eventDay))  // simple case, still in this year but in the future or today
+  {  
+    nbrYears = year()-eventStartYear;
+  }
+  else  // event is passed for this year, so add one to year before doing the math
+  {
+    nbrYears = (year()+1)-eventStartYear;
+  }
+
+  // add the st, nd, rd, th
+  if ((nbrYears % 10 == 1) && (nbrYears % 100 != 11))
+  {
+      return (String)nbrYears+"st";
+  }
+  else if ((nbrYears % 10 == 2) && (nbrYears % 100 != 12))
+  {
+      return (String)nbrYears+"nd";
+  }
+  else if ((nbrYears % 10 == 3) && (nbrYears % 100 != 13))
+  {
+    return (String)nbrYears+"rd";
+  }
+  else
+  {
+    return (String)nbrYears+"th";
+  }
 }
 
 int daysBetweenDateAndNow (int tYear, int tMonth, int tDay)
