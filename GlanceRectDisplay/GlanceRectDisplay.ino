@@ -139,20 +139,6 @@ void setup() {
   // prep the display
   Serial.begin(115200);
 
-
-  for(int i=0; i<=maxEventIndex; i++)
-  {
-    Serial.println(events[i].eventName);
-    Serial.printf("%d/%d\n", events[i].month, events[i].day);
-    if(events[i].startYear > 0)
-       Serial.printf("Starting in %d\n",events[i].startYear);
-    Serial.println(events[i].iconFilename);
-    Serial.printf("Color: %04x\n",events[i].textColor);
-    Serial.println("---------------------");
-  }
-
-
-
   // turn off this horrible RGB LED (bizarre but 255 is the low value for this)
   pinMode(4, OUTPUT); //red
   pinMode(16, OUTPUT); //green
