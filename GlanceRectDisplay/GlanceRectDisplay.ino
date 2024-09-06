@@ -26,11 +26,6 @@ struct event {
                   char iconFilename[100];   // filename matching a 100px wide PNG icon file loaded in SPIFFS, including the leading slash ("/")
                 };
 
-// to be removed
-int yearMarried = 1987;
-
-
-
 #include "secrets.h"
 
 int maxEventIndex = (sizeof(events)/sizeof(event))-1;
